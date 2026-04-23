@@ -12,6 +12,6 @@ had to make this for personal use to show off my bars lol
 
 ### TODOS
 - fix whitespace issue  
-- annotations (via underlining)  
+- annotations (via underlining)  X
 - alternate/go back to previous colors  
 - infinite/auto make equidistantly spaced for each palette  

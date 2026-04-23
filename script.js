@@ -65,7 +65,7 @@ function restoreFromHistory(snapshot) {
     state.colorHistory = JSON.parse(JSON.stringify(snapshot.colorHistory));
 }
 
-// ==================== UTILITY FUNCTIONS ====================
+// ==================== UTILITY FUNCTIONS ======================
 function generateGradient(startColor, middleColor, endColor, steps = 10) {
     const colors = [];
     const start = hexToRgb(startColor);
