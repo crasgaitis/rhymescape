@@ -1,15 +1,18 @@
 // ==================== STATE MANAGEMENT ====================
 const state = {
     text: '',
-    highlights: [], // { start, end, colorIndex }
+    highlights: [], // { id, start, end, colorIndex }
+    annotations: [], // { id, start, end, text }
     palette: 'sunset',
     customPalette: null,
     editMode: true,
     highlightMode: false,
+    annotMode: false,
     currentColorIndex: 0,
     colorHistory: {},
     history: [],
     historyIndex: -1,
+    activeAnnotationId: null,
 };
 
 const palettes = {
@@ -26,6 +29,7 @@ function saveToHistory() {
     const snapshot = {
         text: state.text,
         highlights: JSON.parse(JSON.stringify(state.highlights)),
+        annotations: JSON.parse(JSON.stringify(state.annotations)),
         currentColorIndex: state.currentColorIndex,
         colorHistory: JSON.parse(JSON.stringify(state.colorHistory)),
     };
@@ -39,6 +43,7 @@ function undo() {
     if (state.historyIndex > 0) {
         state.historyIndex--;
         restoreFromHistory(state.history[state.historyIndex]);
+        closeAnnotationModal();
         render();
     }
 }
@@ -47,6 +52,7 @@ function redo() {
     if (state.historyIndex < state.history.length - 1) {
         state.historyIndex++;
         restoreFromHistory(state.history[state.historyIndex]);
+        closeAnnotationModal();
         render();
     }
 }
@@ -54,6 +60,7 @@ function redo() {
 function restoreFromHistory(snapshot) {
     state.text = snapshot.text;
     state.highlights = JSON.parse(JSON.stringify(snapshot.highlights));
+    state.annotations = JSON.parse(JSON.stringify(snapshot.annotations));
     state.currentColorIndex = snapshot.currentColorIndex;
     state.colorHistory = JSON.parse(JSON.stringify(snapshot.colorHistory));
 }
@@ -132,6 +139,7 @@ function downloadJSON() {
     const data = {
         text: state.text,
         highlights: state.highlights,
+        annotations: state.annotations,
         palette: state.palette,
         customPalette: state.customPalette,
         colorHistory: state.colorHistory,
@@ -151,6 +159,7 @@ function generateShareableLink() {
     const data = {
         text: state.text,
         highlights: state.highlights,
+        annotations: state.annotations,
         palette: state.palette,
         customPalette: state.customPalette,
         colorHistory: state.colorHistory,
@@ -176,6 +185,7 @@ function processImportJSON() {
         const data = JSON.parse(json);
         state.text = data.text || '';
         state.highlights = data.highlights || [];
+        state.annotations = data.annotations || [];
         state.palette = data.palette || 'sunset';
         state.customPalette = data.customPalette || null;
         state.colorHistory = data.colorHistory || {};
@@ -199,6 +209,7 @@ function loadSharedData() {
             const shared = JSON.parse(json);
             state.text = shared.text || '';
             state.highlights = shared.highlights || [];
+            state.annotations = shared.annotations || [];
             state.palette = shared.palette || 'sunset';
             state.customPalette = shared.customPalette || null;
             state.colorHistory = shared.colorHistory || {};
@@ -212,9 +223,87 @@ function loadSharedData() {
     return false;
 }
 
+// ==================== ANNOTATION MODAL ====================
+function openAnnotationInputModal(annotationId = null) {
+    const modal = document.getElementById('annotationInputModal');
+    const input = document.getElementById('annotationInput');
+    const title = document.getElementById('annotationModalTitle');
+    
+    if (annotationId) {
+        const annotation = state.annotations.find(a => a.id === annotationId);
+        if (annotation) {
+            input.value = annotation.text || '';
+            title.textContent = 'Edit Annotation';
+            state.activeAnnotationId = annotationId;
+        }
+    } else {
+        input.value = '';
+        title.textContent = 'Add Annotation';
+        state.activeAnnotationId = null;
+    }
+    
+    setTimeout(() => input.focus(), 0);
+    modal.classList.add('active');
+}
+
+function closeAnnotationModal() {
+    const modal = document.getElementById('annotationInputModal');
+    modal.classList.remove('active');
+    const popup = document.getElementById('annotationPopup');
+    if (popup) popup.remove();
+    state.activeAnnotationId = null;
+}
+
+function saveAnnotationText() {
+    const input = document.getElementById('annotationInput');
+    const text = input.value.trim();
+    
+    if (state.activeAnnotationId) {
+        const annotation = state.annotations.find(a => a.id === state.activeAnnotationId);
+        if (annotation) {
+            annotation.text = text;
+            saveToHistory();
+        }
+    }
+    
+    closeAnnotationModal();
+    render();
+}
+
+function showAnnotationPopup(annotationId, event) {
+    const annotation = state.annotations.find(a => a.id === annotationId);
+    if (!annotation || !annotation.text) return;
+    
+    closeAnnotationModal();
+    
+    const popup = document.createElement('div');
+    popup.id = 'annotationPopup';
+    popup.className = 'annotation-popup';
+    popup.textContent = annotation.text;
+    document.body.appendChild(popup);
+    
+    const rect = event.target.getBoundingClientRect();
+    popup.style.left = (rect.left + window.scrollX) + 'px';
+    popup.style.top = (rect.top - popup.offsetHeight - 8 + window.scrollY) + 'px';
+    
+    popup.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        openAnnotationInputModal(annotationId);
+    });
+}
+
 // ==================== EDITOR FUNCTIONS ====================
 function toggleHighlightMode() {
     state.highlightMode = !state.highlightMode;
+    state.annotMode = false;
+    closeAnnotationModal();
+    render();
+}
+
+function toggleAnnotMode() {
+    state.annotMode = !state.annotMode;
+    state.highlightMode = false;
+    closeAnnotationModal();
     render();
 }
 
@@ -223,17 +312,33 @@ function cycleColor() {
     render();
 }
 
+function applyAnnotation(start, end) {
+    if (end <= start) return;
+
+    // Remove overlapping annotations
+    state.annotations = state.annotations.filter(a => !(a.start < end && a.end > start));
+
+    const newAnnotation = {
+        id: crypto.randomUUID(),
+        start,
+        end,
+        text: '',
+    };
+    
+    state.annotations.push(newAnnotation);
+    
+    // Don't save to history yet - wait for user to enter text
+    // Just store the ID so we can populate the modal
+    state.activeAnnotationId = newAnnotation.id;
+    
+    openAnnotationInputModal(newAnnotation.id);
+}
+
 function applyHighlight(start, end) {
     if (end <= start) return;
 
     // Remove overlapping highlights
     state.highlights = state.highlights.filter(h => !(h.start < end && h.end > start));
-
-    // state.highlights.push({
-    //     start,
-    //     end,
-    //     colorIndex: state.currentColorIndex,
-    // });
 
     state.highlights.push({
         id: crypto.randomUUID(),
@@ -260,9 +365,18 @@ function deleteHighlight(index) {
     showStatus('Highlight removed');
 }
 
+function deleteAnnotation(id) {
+    state.annotations = state.annotations.filter(a => a.id !== id);
+    saveToHistory();
+    render();
+    showStatus('Annotation removed');
+}
+
 function clearAll() {
-    if (confirm('Are you sure you want to clear all highlights?')) {
+    if (confirm('Are you sure you want to clear all highlights and annotations?')) {
         state.highlights = [];
+        state.annotations = [];
+        closeAnnotationModal();
         saveToHistory();
         render();
         showStatus('Cleared all');
@@ -271,17 +385,20 @@ function clearAll() {
 
 function previewPublished() {
     state.editMode = false;
+    closeAnnotationModal();
     renderApp();
 }
 
 function exitPreview() {
     state.editMode = true;
+    closeAnnotationModal();
     renderApp();
 }
 
 function editAsNew() {
     window.history.replaceState({}, document.title, window.location.pathname);
     state.editMode = true;
+    closeAnnotationModal();
     renderApp();
 }
 
@@ -294,8 +411,13 @@ function renderEditor() {
     const marks = [];
 
     state.highlights.forEach((h, i) => {
-        marks.push({ type: 'highlight', start: h.start, end: h.end, data: h, index: i });
+        marks.push({ type: 'highlight', start: h.start, end: h.end, data: h });
     });
+
+    state.annotations.forEach((a) => {
+        marks.push({ type: 'annotation', start: a.start, end: a.end, data: a });
+    });
+
     marks.sort((a, b) => a.start - b.start);
 
     let i = 0;
@@ -303,63 +425,76 @@ function renderEditor() {
         const overlapping = marks.filter(m => m.start === i);
 
         if (overlapping.length > 0) {
-            const mark = overlapping[0];
-            const sliceEnd = mark.end;
+            const highlightMark = overlapping.find(m => m.type === 'highlight');
+            const annotMark = overlapping.find(m => m.type === 'annotation');
+            
+            const sliceEnd = Math.min(
+                highlightMark ? highlightMark.end : Infinity,
+                annotMark ? annotMark.end : Infinity
+            );
             const slice = text.slice(i, sliceEnd);
-            const color = getColorForIndex(mark.data.colorIndex);
+            
+            let style = '';
+            if (highlightMark) {
+                const color = getColorForIndex(highlightMark.data.colorIndex);
+                style += `background-color: ${color};`;
+            }
+            if (annotMark) {
+                style += 'text-decoration: underline; text-decoration-color: black; text-underline-offset: 2px;';
+            }
 
-            html += `<span class="highlight" style="background-color: ${color};" data-id="${mark.data.id}">${escapeHtml(slice)}</span>`;
+            html += `<span class="mark" style="${style}" data-highlight-id="${highlightMark?.data.id || ''}" data-annot-id="${annotMark?.data.id || ''}">${escapeHtml(slice)}</span>`;
 
             i = sliceEnd;
         } else {
-            const char = text[i];
-
-            // if (char === '\n') {
-            //     html += '<br>';
-            // } else {
-            html += escapeHtml(char);
-            // }
-
+            html += escapeHtml(text[i]);
             i++;
         }
     }
 
     editor.innerHTML = html;
 
-
-    // Attach event listeners to highlights
-    document.querySelectorAll('.highlight').forEach(el => {
-        // el.addEventListener('click', (e) => {
-        //     e.stopPropagation();
-
-        //     const index = parseInt(el.dataset.highlight);
-        //     const highlight = state.highlights[index];
-
-        //     if (state.highlightMode) {
-        //         // remove ONLY this specific segment
-        //         state.highlights.splice(index, 1);
-        //         saveToHistory();
-        //         render();
-        //         showStatus('Highlight removed');
-        //     }
-        // });
-
+    // Attach event listeners to marks
+    document.querySelectorAll('.mark').forEach(el => {
         el.addEventListener('click', (e) => {
             e.stopPropagation();
 
-            const id = el.dataset.id;
+            const highlightId = el.dataset.highlightId;
+            const annotId = el.dataset.annotId;
 
-            if (state.highlightMode) {
-                state.highlights = state.highlights.filter(h => h.id !== id);
+            if (state.highlightMode && highlightId) {
+                state.highlights = state.highlights.filter(h => h.id !== highlightId);
                 saveToHistory();
                 render();
                 showStatus('Highlight removed');
+            } else if (state.annotMode && annotId) {
+                state.annotations = state.annotations.filter(a => a.id !== annotId);
+                saveToHistory();
+                render();
+                showStatus('Annotation removed');
             }
+        });
+
+        el.addEventListener('mouseover', (e) => {
+            const annotId = el.dataset.annotId;
+            if (annotId) {
+                const annotation = state.annotations.find(a => a.id === annotId);
+                if (annotation && annotation.text) {
+                    showAnnotationPopup(annotId, e);
+                }
+            }
+        });
+
+        el.addEventListener('mouseout', () => {
+            const popup = document.getElementById('annotationPopup');
+            if (popup) popup.remove();
         });
 
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            cycleColor();
+            if (state.highlightMode) {
+                cycleColor();
+            }
         });
     });
 }
@@ -478,7 +613,7 @@ function renderApp() {
         app.innerHTML = `
             <div class="shared-view">
                 <div class="shared-header">
-                    <h1>✧ Rhyme Highlighter</h1>
+                    <h1>✧ Rhymescape</h1>
                     <p>Published view</p>
                 </div>
                 <div class="shared-content" id="sharedContent"></div>
@@ -503,6 +638,9 @@ function renderApp() {
                     <div class="toolbar">
                         <div class="toolbar-group">
                             <button class="primary ${state.highlightMode ? 'active' : ''}" onclick="toggleHighlightMode()">✓ Highlight</button>
+                        </div>
+                        <div class="toolbar-group">
+                            <button class="primary ${state.annotMode ? 'active' : ''}" onclick="toggleAnnotMode()">✓ Annotate</button>
                         </div>
                         <div class="toolbar-group">
                             <button onclick="undo()" ${state.historyIndex <= 0 ? 'disabled' : ''}>↶ Undo</button>
@@ -531,7 +669,7 @@ function renderApp() {
                             <span><span class="shortcut-key">Right-Click Highlight</span> Next color</span>
                         </div>
                         <div class="shortcut-item">
-                            <span><span class="shortcut-key">Double-Click (in mode)</span> Remove highlight</span>
+                            <span><span class="shortcut-key">Click (in mode)</span> Remove highlight/underline</span>
                         </div>
                     </div>
                 </div>
@@ -564,6 +702,22 @@ function renderApp() {
                     <div class="modal-buttons">
                         <button class="primary" onclick="createCustomPalette()">Create</button>
                         <button onclick="document.getElementById('customPaletteModal').classList.remove('active')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Annotation Input Modal -->
+            <div class="modal" id="annotationInputModal">
+                <div class="modal-content">
+                    <span class="close-modal" onclick="closeAnnotationModal()">×</span>
+                    <h2 id="annotationModalTitle">Add Annotation</h2>
+                    <div class="modal-section">
+                        <label>Enter annotation text:</label>
+                        <textarea id="annotationInput" placeholder="Type your annotation here..." style="width: 100%; min-height: 80px; padding: 8px; font-family: inherit;"></textarea>
+                    </div>
+                    <div class="modal-buttons">
+                        <button class="primary" onclick="saveAnnotationText()">Save</button>
+                        <button onclick="closeAnnotationModal()">Cancel</button>
                     </div>
                 </div>
             </div>
@@ -603,15 +757,12 @@ function renderApp() {
         
         const editor = document.getElementById('editor');
         editor.addEventListener('input', (e) => {
-            // state.text = e.target.textContent;
-            // state.text = e.target.innerText;
-            // state.text = e.target.innerText.replace(/\r\n/g, '\n');
             state.text = e.target.innerText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         });
 
         editor.addEventListener('mouseup', () => {
             const selection = window.getSelection();
-            if (selection.toString().length > 0 && state.highlightMode) {
+            if (selection.toString().length > 0 && (state.highlightMode || state.annotMode)) {
                 const range = selection.getRangeAt(0);
                 const preCaretRange = range.cloneRange();
                 preCaretRange.selectNodeContents(editor);
@@ -619,7 +770,11 @@ function renderApp() {
                 const end = preCaretRange.toString().length;
                 const start = end - selection.toString().length;
 
-                applyHighlight(start, end);
+                if (state.highlightMode) {
+                    applyHighlight(start, end);
+                } else if (state.annotMode) {
+                    applyAnnotation(start, end);
+                }
                 selection.removeAllRanges();
             }
         });
@@ -635,6 +790,13 @@ function renderApp() {
             }
         });
 
+        // Close annotation modal on escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeAnnotationModal();
+            }
+        });
+
         render();
     }
 }
@@ -647,8 +809,13 @@ function renderSharedContent() {
     const marks = [];
     
     state.highlights.forEach((h, i) => {
-        marks.push({ type: 'highlight', start: h.start, end: h.end, data: h, index: i });
+        marks.push({ type: 'highlight', start: h.start, end: h.end, data: h });
     });
+
+    state.annotations.forEach((a) => {
+        marks.push({ type: 'annotation', start: a.start, end: a.end, data: a });
+    });
+
     marks.sort((a, b) => a.start - b.start);
 
     let i = 0;
@@ -657,12 +824,25 @@ function renderSharedContent() {
         const overlapping = marks.filter(m => m.start === i);
 
         if (overlapping.length > 0) {
-            const mark = overlapping[0];
-            const sliceEnd = mark.end;
+            const highlightMark = overlapping.find(m => m.type === 'highlight');
+            const annotMark = overlapping.find(m => m.type === 'annotation');
+            
+            const sliceEnd = Math.min(
+                highlightMark ? highlightMark.end : Infinity,
+                annotMark ? annotMark.end : Infinity
+            );
             const slice = text.slice(i, sliceEnd);
-            const color = getColorForIndex(mark.data.colorIndex);
+            
+            let style = '';
+            if (highlightMark) {
+                const color = getColorForIndex(highlightMark.data.colorIndex);
+                style += `background-color: ${color};`;
+            }
+            if (annotMark) {
+                style += 'text-decoration: underline; text-decoration-color: black; text-underline-offset: 2px;';
+            }
 
-            html += `<span class="highlight" style="background-color: ${color};">${escapeHtml(slice)}</span>`;
+            html += `<span class="mark" style="${style}" data-annot-id="${annotMark?.data.id || ''}">${escapeHtml(slice)}</span>`;
 
             i = sliceEnd;
         } else {
@@ -672,6 +852,24 @@ function renderSharedContent() {
     }
 
     content.innerHTML = html;
+
+    // Attach hover listeners to shared content marks
+    document.querySelectorAll('.mark').forEach(el => {
+        el.addEventListener('mouseover', (e) => {
+            const annotId = el.dataset.annotId;
+            if (annotId) {
+                const annotation = state.annotations.find(a => a.id === annotId);
+                if (annotation && annotation.text) {
+                    showAnnotationPopup(annotId, e);
+                }
+            }
+        });
+
+        el.addEventListener('mouseout', () => {
+            const popup = document.getElementById('annotationPopup');
+            if (popup) popup.remove();
+        });
+    });
 }
 
 function copyToClipboard(elementId) {
@@ -695,5 +893,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
 document.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    cycleColor();
+    if (state.highlightMode) {
+        cycleColor();
+    }
 }, true);
+
+// Style for annotation popup
+const style = document.createElement('style');
+style.textContent = `
+    #annotationPopup {
+        position: fixed;
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+        max-width: 300px;
+        word-wrap: break-word;
+        z-index: 10000;
+        pointer-events: auto;
+        white-space: pre-wrap;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+`;
+document.head.appendChild(style);
